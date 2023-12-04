@@ -25,34 +25,41 @@ class AttentionHead(nn.Module):
         # 这里不是分类问题为何也用 softmax 
         # 因为点积得到的结果 shape 是 SentenceASize, SetenceBSize 
         # F.softmax 得到的结果是A*B softmax 在 B 在每个单词上相对于A的相关性
-              
+        # value 和 query 是否 
         attention_weights = F.softmax(scores, dim=-1)
+        
+        #q,k,v sequence_len 是同一个值,保证 atten_weights 能和 value 计算
         context = torch.matmul(attention_weights, value)
+        
         return context 
 
 
 
 class MultiHeadAttention(nn.Module):
     def __init__(self,headcnt,hidden_dim,output_dim):
+        #super不需要代入参数
         super(MultiHeadAttention,self).__init__()
         print("MultiHeadAttention")
         self.mha = nn.ModuleList([AttentionHead(hidden_dim,output_dim) for i in range(headcnt)])
         self.join_linear = nn.Linear(headcnt * hidden_dim, output_dim)
     
-    def forward(self, inputs):
-        head_outputs = [head(inputs)  for head in self.mha]
+    def forward(self, q,k,v):
+        head_outputs = [head(q,k,v)  for head in self.mha]
+        #
+        multihead_output = torch.cat(head_outputs, dim=-1)
+        self.join_linear(head_outputs)
         
 
 class Decoder(nn.Module):
     def __init__(self, embed_dim):
         super(Decoder,self).__init__()
-        self.attention = MultiHeadAttention()
+        self.attention = MultiHeadAttention(3,512,1024)
         self.ffd = nn.Sequential( nn.Linear(embed_dim, 4 * embed_dim),nn.ReLU(),nn.Linear(4 * embed_dim, embed_dim))
 
 class Encoder(nn.Module):
     def __init__(self,embed_dim):
         super(Encoder,self).__init__()
-        self.attention = MultiHeadAttention()
+        self.attention = MultiHeadAttention(3,512,1024)
         self.ffd = nn.Sequential( nn.Linear(embed_dim, 4 * embed_dim),nn.ReLU(),nn.Linear(4 * embed_dim, embed_dim))
 
         
