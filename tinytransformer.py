@@ -62,7 +62,7 @@ class MultiHeadAttention(nn.Module):
     def forward(self, q,k,v):
         #output shape [nhead*seq_len , nhead*seq_len ]
         head_outputs = [head(q,k,v)  for head in self.mha]
-        #
+        
         multihead_output = torch.cat(head_outputs, dim=-1)
         return self.join_linear(head_outputs)
         
@@ -92,8 +92,8 @@ class Decoder(nn.Module):
         att = tokens + self.dropout_att(att)
         att = self.att_norm(att)
 
-# 为什么在 + 之前做 dropout 操作
-# dropout 一般跟随在复杂的算子后面, 降低训练出来算子过拟合的概率 让算子中的每一个神经元都起到作用
+        # 为什么在 + 之前做 dropout 操作    
+        # dropout 一般跟随在复杂的算子后面, 降低训练出来算子过拟合的概率 让算子中的每一个神经元都起到作用
         ffn = self.dropout(self.fn_linear_2(self.ffn_relu(self.ffn_linear_1(att))))
         ffn = att + ffn
         ffn = self.ffn_norm(ffn)
@@ -140,6 +140,7 @@ class PositionEmbedding(nn.Module):
     def forward(self,x):
         #PE长度是固定的，输入 x 的长度是不固定的,因此要注意限制长度. seq_len 维度是1
         seq_len = x.size(1)
+        #指定第1个维度可能存在裁切
         return self.pe[:, :seq_len] + x[:,:sql_len]
 
 class TTransformer(nn.Module):
@@ -149,9 +150,10 @@ class TTransformer(nn.Module):
         self.pe_embedding = PositionEmbedding(1024, hidden_dim)
         self.encoder = nn.ModuleList([Encoder(nhead, hidden_dim) for i in range(nenc)])
         self.decoder = nn.ModuleList([Decoder(nhead,hidden_dim) for i in range(ndec)])
-        
+        self.voc_linear = nn.Linear(hidden_dim, voc_size)
     def forward(self, x):
-        return self.decoder(self.encoder(self.pe_embedding(self.input_embedding(x))))
+        decode_result =  self.decoder(self.encoder(self.pe_embedding(self.input_embedding(x))))
+        return F.softmax(self.res_linear(decode_result),dim=-1)
 
 class PEGenerator():
     def __init__(self, embed_size, constant=10000):
