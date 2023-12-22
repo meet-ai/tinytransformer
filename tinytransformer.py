@@ -2,6 +2,10 @@
 import torch 
 from torch import nn
 import math
+from tensorboardX import SummaryWriter
+from torchvision.utils import make_grid
+writer = SummaryWriter('./result_tensorboard')
+
 # 这里有个 dropout
 class AttentionHead(nn.Module):
     #head 是子空间的概念,意思是让输入的形式更多样化. 灵感来自于人类可以多个维度的去输入数据来进行学习.
@@ -149,6 +153,9 @@ class TTransformer(nn.Module):
         self.input_embedding = nn.Embedding(voc_size,hidden_dim)
         self.pe_embedding = PositionEmbedding(1024, hidden_dim)
         self.encoder = nn.ModuleList([Encoder(nhead, hidden_dim) for i in range(nenc)])
+
+        # decoder 第一层的输入是 shift tokens 
+        # decoder 第二层的输入是 encoder 出来的 lookup_table*v，携带者自相关性信息的 sentence.
         self.decoder = nn.ModuleList([Decoder(nhead,hidden_dim) for i in range(ndec)])
         self.voc_linear = nn.Linear(hidden_dim, voc_size)
     def forward(self, x):
@@ -182,6 +189,10 @@ def get_pe(seq_len,embed_size):
 
 if __name__== "__main__":
     ttransformer = TTransformer()
+    out1 = torch.rand(3*2*2*4).reshape(3,2,2,4)
+    grid1 = make_grid(out1.view(-1,1,out1.shape[2],out1.shape[3]), nrow=8)
+    writer.add_image("grid1",grid1,global_step=1)
+
     #print(ttransformer)
    
 
