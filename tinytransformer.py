@@ -90,9 +90,9 @@ class MultiHeadAttention(nn.Module):
         return self.join_linear(head_outputs)
         
 
-class DecoderLayer(nn.Module):
+class Decoder(nn.Module):
     def __init__(self,nhead, embed_dim):
-        super(DecoderLayer,self).__init__()
+        super(Decoder,self).__init__()
         # MHA 相当于做了一个具有冗余的查找表 , 
         # 让句子和查找表之间建立组合成一个更复杂的数据, 而不仅仅是句子本身. 
         # 还包含句子内部词汇之间的关系. 是一个更高纬度的数据.
@@ -127,10 +127,10 @@ class DecoderLayer(nn.Module):
         #encoder-decoder attention 
         return ffn
 
-class Decoder(nn.Module):
+class MultiDecoder(nn.Module):
     def __init__(self,voc_size=8000,ndec=4,nhead=6,embed_dim=256):
-        super(Decoder,self).__init__()
-        self.decoders = nn.ModuleList([DecoderLayer(nhead, embed_dim) for i in range(ndec)])
+        super(MultiDecoder,self).__init__()
+        self.decoders = nn.ModuleList([Decoder(nhead, embed_dim) for i in range(ndec)])
     def forward(self, src, target,srcmask,tgtmask):
         
         target = token
@@ -138,9 +138,9 @@ class Decoder(nn.Module):
             target = layer(src,target,srcmask,tgtmask)
         return target
 
-class EncoderLayer(nn.Module):
+class Encoder(nn.Module):
     def __init__(self,nhead,embed_dim):
-        super(EncoderLayer,self).__init__()
+        super(Encoder,self).__init__()
         # attention 的 Linear Shape
         # seq_len 
         self.attention = MultiHeadAttention(nhead,embed_dim)
@@ -170,10 +170,10 @@ class EncoderLayer(nn.Module):
         ffn = self.ffn_norm(ffn)
         return ffn
 
-class Encoder(nn.Module):
+class MultiEncoder(nn.Module):
     def __init__(self,voc_size=8000,nenc=4,nhead=6,hidden_dim=256):
-        super(Encoder,self).__init__()
-        self.encoders = nn.ModuleList([EncoderLayer(nhead, hidden_dim) for i in range(nenc)])
+        super(MultiEncoder,self).__init__()
+        self.encoders = nn.ModuleList([Encoder(nhead, hidden_dim) for i in range(nenc)])
     
     def forward(self, src, src_pad_mask):
         output = None
@@ -200,11 +200,11 @@ class TTransformer(nn.Module):
         super(TTransformer,self).__init__()
         self.input_embedding = nn.Embedding(voc_size,hidden_dim)
         self.pe_embedding = PositionEmbedding(1024, hidden_dim)
-        self.encoder =  Encoder() 
+        self.encoders =  MultiEncoder() 
 
         # decoder 第一层的输入是 shift tokens 
         # decoder 第二层的输入是 encoder 出来的 lookup_table*v，携带者自相关性信息的 sentence.
-        self.decoder =  Decoder() # nn.ModuleList([Decoder(nhead,hidden_dim) for i in range(ndec)])
+        self.decoder =  MultiDecoder() # nn.ModuleList([Decoder(nhead,hidden_dim) for i in range(ndec)])
         self.voc_linear = nn.Linear(hidden_dim, voc_size)
 
     def forward(self, src, tgt):
