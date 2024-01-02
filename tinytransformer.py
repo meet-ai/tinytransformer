@@ -152,15 +152,15 @@ class Encoder(nn.Module):
         # inner_dim
         inner_dim = 2048
         self.ffn_linear_1 = nn.Linear(embed_dim,inner_dim)
-        self.ffn_linear_2 = nn.Linear(embed_dim,inner_dim)
+        self.ffn_linear_2 = nn.Linear(inner_dim,embed_dim)
         self.ffn_dropout = nn.Dropout(0.1)
         self.ffn_relu = nn.ReLU()
         self.ffn_norm = nn.LayerNorm(embed_dim)
 
-    def forward(self, tokens):
+    def forward(self, tokens, mask=None):
         #+ pe
         # tokens  = tokens + get_pe()
-        att = self.attention(tokens,tokens,tokens)
+        att = self.attention(tokens,tokens,tokens,mask)
         att = tokens + self.dropout_att(att_src)
         att = self.att_norm(att)
 
@@ -178,7 +178,7 @@ class MultiEncoder(nn.Module):
     def forward(self, src, src_pad_mask):
         output = None
         for layer in self.encoders:
-            output = layer(src)
+            output = layer(src,src_pad_mask)
         return output
 
 class PositionEmbedding(nn.Module):
@@ -196,23 +196,34 @@ class PositionEmbedding(nn.Module):
 
 
 class TTransformer(nn.Module):
-    def __init__(self,voc_size=8000,nenc=4,ndec=4,nhead=6,hidden_dim=256):
+    def __init__(self,voc_src_size=8000,voc_tgt_size=8000,nenc=4,ndec=4,nhead=6,hidden_dim=256):
         super(TTransformer,self).__init__()
-        self.input_embedding = nn.Embedding(voc_size,hidden_dim)
-        self.pe_embedding = PositionEmbedding(1024, hidden_dim)
+        self.src_embedding = nn.Embedding(voc_src_size,hidden_dim)
+        self.tgt_embedding = nn.Embedding(voc_tgt_size,hidden_dim)
+
+        self.src_pe_embedding = PositionEmbedding(1024, hidden_dim)
+        self.tgt_pe_embedding = PositionEmbedding(1024, hidden_dim)
+
         self.encoders =  MultiEncoder() 
 
         # decoder 第一层的输入是 shift tokens 
         # decoder 第二层的输入是 encoder 出来的 lookup_table*v，携带者自相关性信息的 sentence.
-        self.decoder =  MultiDecoder() # nn.ModuleList([Decoder(nhead,hidden_dim) for i in range(ndec)])
-        self.voc_linear = nn.Linear(hidden_dim, voc_size)
+        self.decoders =  MultiDecoder() # nn.ModuleList([Decoder(nhead,hidden_dim) for i in range(ndec)])
+        self.voc_linear = nn.Linear(hidden_dim, voc_tgt_size)
+      
 
     def forward(self, src, tgt):
-        for enc in self.encoder:
-            enc_result = encoder(src)
-        encode_result = self.decoder(enc_result,)
-        decode_result =  self.decoder(self.encoder(self.pe_embedding(self.input_embedding(x))))
-        return F.softmax(self.res_linear(decode_result),dim=-1)
+        src_mask = gene_src_mask(src)
+        tgt_mask = gene_tgt_mask(tgt)
+
+        src = self.src_pe_embedding(self.src_embedding(src))
+        src = self.encoders(src, src_mask)
+
+        tgt = self.tgt_pe_embedding(self.tgt_embedding(tgt))
+        tgt =  self.decoders(src,tgt,src_mask, tgt_mask)
+
+        #F.softmax 返回
+        return F.softmax(self.res_linear(tgt),dim=-1)
 
 class PEGenerator():
     def __init__(self, embed_size, constant=10000):
@@ -241,7 +252,7 @@ def get_pe(seq_len,embed_size):
 
 if __name__== "__main__":
     ttransformer = TTransformer()
-    out1 = torch.rand(3*2*2*4).reshape(3,2,2,4)
+    #out1 = torch.rand(3*2*2*4).reshape(3,2,2,4)
     #grid1 = make_grid(out1.view(-1,1,out1.shape[2],out1.shape[3]), nrow=8)
     #writer.add_image("grid1",grid1,global_step=1)
 
