@@ -97,15 +97,17 @@ class Decoder(nn.Module):
         # 让句子和查找表之间建立组合成一个更复杂的数据, 而不仅仅是句子本身. 
         # 还包含句子内部词汇之间的关系. 是一个更高纬度的数据.
         # 那能不能去掉 v * lookup 这个过程呢? 
-        # 不能 因为 lookup 里面是相关性百分比, 已经失去原始语义 
-        self.attention = MultiHeadAttention(nhead,embed_dim)
-        self.dropout = nn.Dropout(0.1)
-        self.att_norm = nn.LayerNorm(embed_dim)
-        #self.pe = PositionEmbedding(embed_dim)
-    
-        self.attention2 = MultiHeadAttention(nhead,embed_dim)
+        # 因为 lookup 里面是相关性百分比, 已经失去原始语义 
+        self.self_att = MultiHeadAttention(nhead,embed_dim)
+        self.self_att_dp = nn.Dropout(0.1)        #dropout 算子有的代码是同一个 有的代码是不同的
+        self.self_att_norm = nn.LayerNorm(embed_dim)
+
+        self.cross_att_dropout = nn.Dropout(0.1)
+        self.cross_att_norm = nn.LayerNorm(embed_dim)
+        self.cross_att = MultiHeadAttention(nhead,embed_dim)
         #ffn 的两次线性变化,把维度提升又降了下来 
         inner_dim = 2048
+
         self.ffn_linear_1 = nn.Linear(embed_dim,inner_dim)
         self.ffn_linear_2 = nn.Linear(inner_dim,embed_dim)
         self.ffn_dropout = nn.Dropout(0.1)
@@ -114,13 +116,23 @@ class Decoder(nn.Module):
 
     def forward(self, src, target, srcmask, tgtmask):
         #self-attention
-        att = self.attention(src,src,src,mask=srcmask)
-        att = tokens + self.dropout_att(att)
-        att = self.att_norm(att)
+        resdiual = target
+        att = self.self_att_dp(self.self_attention(target, target, target, mask=tgtmask))
+        att = resdiual + self.self_att_dp(att)
+        att = self.self_att_norm(att)
 
         # 为什么在 + 之前做 dropout 操作    
         # dropout 一般跟随在复杂的算子后面, 降低训练出来算子过拟合的概率 让算子中的每一个神经元都起到作用
-        ffn = self.dropout(self.fn_linear_2(self.ffn_relu(self.ffn_linear_1(att))))
+        # encoder-decoder-att
+
+        # cross-att 的 residual 是?
+        resdiual = att
+        att = self.cross_att(att,src,src,mask=srcmask)
+        att = self.cross_att_dp(att)
+        att = self.cross_att_norm(residual+att)
+
+        #ffn
+        ffn = self.fn_linear_2(self.ffn_relu(self.ffn_linear_1(att)))
         ffn = att + ffn
         ffn = self.ffn_norm(ffn)
 
@@ -160,13 +172,15 @@ class Encoder(nn.Module):
     def forward(self, tokens, mask=None):
         #+ pe
         # tokens  = tokens + get_pe()
+        residual = tokens
         att = self.attention(tokens,tokens,tokens,mask)
-        att = tokens + self.dropout_att(att_src)
+        att = resdiual + self.dropout(att_src)
         att = self.att_norm(att)
 
-# ffn 有些 dropout 实现在两个 linear 之间
-        ffn = self.dropout(self.fn_linear_2(self.ffn_relu(self.ffn_linear_1(att))))
-        ffn = att +ffn
+        # ffn 
+        resdiual = att
+        ffn = self.ffn_dropout(self.fn_linear_2(self.ffn_relu(self.ffn_linear_1(att))))
+        ffn = att + resdiual
         ffn = self.ffn_norm(ffn)
         return ffn
 
@@ -207,7 +221,7 @@ class TTransformer(nn.Module):
         self.encoders =  MultiEncoder() 
 
         # decoder 第一层的输入是 shift tokens 
-        # decoder 第二层的输入是 encoder 出来的 lookup_table*v，携带者自相关性信息的 sentence.
+        # decoder 第二层的输入是 encoder 出来的 lookup_table*v，携带者自相关性信息 的 sentence.
         self.decoders =  MultiDecoder() # nn.ModuleList([Decoder(nhead,hidden_dim) for i in range(ndec)])
         self.voc_linear = nn.Linear(hidden_dim, voc_tgt_size)
       
