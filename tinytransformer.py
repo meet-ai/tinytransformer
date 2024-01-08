@@ -5,17 +5,19 @@ import math
 from tensorboardX import SummaryWriter
 from torchvision.utils import make_grid
 from utils import *
-writer = SummaryWriter('./result_tensorboard')
+import torch.nn.functional as F
+torch.cuda.memory._record_memory_history()
 
-# 这里有个 dropout
+#writer = SummaryWriter('./result_tensorboard')
+
+
+
 class AttentionHead(nn.Module):
     #head 是子空间的概念,意思是让输入的形式更多样化. 灵感来自于人类可以多个维度的去输入数据来进行学习.
-    # encoder 的 mask 用于删除 padding ， 那 encoder mask 就跟token长度有关系了.
-    # decoder 的 mask 用于删除 padding 
-    # decoder 的 mask 在使用之前是否需要对句子
     def __init__(self,hidden_dim, mask=None, dropout=0.1):
         super(AttentionHead, self).__init__()
         # 这里使用了相同的 Linear hidden 和 output
+        print(hidden_dim)
         self.Q = nn.Linear(hidden_dim, hidden_dim)
         self.K = nn.Linear(hidden_dim, hidden_dim)
         self.V = nn.Linear(hidden_dim, hidden_dim) 
@@ -26,11 +28,10 @@ class AttentionHead(nn.Module):
 
     #兼容 self-attention 和 cross-attention 
     def forward(self, q, k, v, mask=None):
-
         #output shape  [seq_len, hidden]
-        query = self.query_projection(q)
-        key = self.key_projection(k)
-        value = self.value_projection(v)
+        query = self.Q(q)
+        key = self.K(k)
+        value = self.V(v)
 
         #注意力的结算过程
         # V* (Q*K/sqrt(length_of_input_dim)
@@ -38,14 +39,14 @@ class AttentionHead(nn.Module):
         # Q.shape = [SetenceSize, dim_of_embedding]
         scores = torch.matmul(query, key.transpose(-2, -1)) / (key.size(-1) ** 0.5)
 
-        # mask 有两种,一种是 encoder 的 mask , 用来把 pad=0转换
-        # 第二种是 decoder 的 mask 用来把未来 token 隐藏掉.
+        # mask 有两种,一种是 encoder 的 mask , 用来把 pad=0 转换
+        # 第二种是 decoder 的 mask 用来把未来 token 隐藏掉. 原理是每一个生成的 token 都是 权重*V ,把权重里面未来token去掉就不会利用到未来数据
+        
         if mask!=None:
-            seq_len = value.shape[1]
-            #torch.tril 是指定某些位置, 填充上三角部位为 True 
-            mask = torch.tril(torch.ones(sql_len, seq_len)) == 0
-            # 对 mask 中 True 的位置填充 -1e9
-            scores[:,mask]=-1e9
+            # mask 的shape 和 scores 的 shape 不一样. 但是因为维度广播机制, 会对shape进行填充.
+            # masked_fill 把 mask 中 True 的位置进行替换
+            scores.masked_fill(mask,-1e9)
+
 
         #softmax 是多分类的激活函数, 把多个分类分布的概率
         #softmax 使用最后一个维度作为分类的维度
@@ -72,23 +73,72 @@ class AttentionHead(nn.Module):
 
 
 class MultiHeadAttention(nn.Module):
-    def __init__(self,headcnt,hidden_dim):
+    def __init__(self, headcnt, hidden_dim):
         #super不需要代入参数
         super(MultiHeadAttention,self).__init__()
         print("MultiHeadAttention")
         #multi-head-attention 有一个优化方案,不用 for loop 把 concat 的特征放在一个矩阵里面只执行一次 attention 操作就可以
         #这里先以逻辑优先把思路串通
-        self.mha = nn.ModuleList([AttentionHead(hidden_dim) for i in range(headcnt)])
-        self.join_linear = nn.Linear(hidden_dim*headcnt, hidden_dim)
+        print(headcnt,hidden_dim)
+        self.headcnt = headcnt
+        self.mha = nn.ModuleList([AttentionHead(hidden_dim//headcnt) for i in range(headcnt)])
+        self.join_linear = nn.Linear(hidden_dim, hidden_dim)
     
-    def forward(self, q,k,v):
+    @profile
+    def forward(self,q,k,v,mask):
         #output shape [nhead*seq_len , nhead*seq_len ]
         #k reshape 
-        head_outputs = [head(q,k,v)  for head in self.mha]
+        # 对于每个 head,传入的 q,k,v,mask 是否都需要进行 split
+        # 每个 q,k,v 都要进行切分
+        qs = torch.chunk(q,self.headcnt,dim=-1)
+        ks = torch.chunk(k,self.headcnt,dim=-1)
+        vs = torch.chunk(v,self.headcnt,dim=-1)
         
+        head_outputs = [self.mha[i](qs[i],ks[i],vs[i],mask)  for i in range(len(qs))]
+        #return head_outputs[0]
         multihead_output = torch.cat(head_outputs, dim=-1)
-        return self.join_linear(head_outputs)
-        
+        return self.join_linear(multihead_output)
+    
+class Encoder(nn.Module):
+    def __init__(self,nhead,embed_dim):
+        super(Encoder,self).__init__()
+        #self-att    
+        self.attention = MultiHeadAttention(nhead,embed_dim)
+        self.dropout = nn.Dropout(0.1)
+        self.att_norm = nn.LayerNorm(embed_dim)
+    
+        #ffn
+        inner_dim = 1024
+        self.ffn_linear_1 = nn.Linear(embed_dim,inner_dim)
+        self.ffn_linear_2 = nn.Linear(inner_dim,embed_dim)
+        self.ffn_dropout = nn.Dropout(0.1)
+        self.ffn_relu = nn.ReLU()
+        self.ffn_norm = nn.LayerNorm(embed_dim)
+    @profile
+    def forward(self, tokens, mask=None):
+        #self-att
+        residual = tokens
+        att = self.attention(tokens,tokens,tokens,mask)
+        att = residual + self.dropout(att)
+        att = self.att_norm(att)
+        #return att
+        # ffn 
+        residual = att
+        ffn = self.ffn_dropout(self.ffn_linear_2(self.ffn_relu(self.ffn_linear_1(att))))
+        ffn = att + residual
+        ffn = self.ffn_norm(ffn)
+        return ffn
+
+class MultiEncoder(nn.Module):
+    def __init__(self,voc_size=8000,nenc=4,nhead=4,hidden_dim=256):
+        super(MultiEncoder,self).__init__()
+        self.encoders = nn.ModuleList([Encoder(nhead, hidden_dim) for i in range(nenc)])
+    
+    def forward(self, src, src_pad_mask):
+        output = src
+        for layer in self.encoders:
+            output = layer(output,src_pad_mask)
+        return output
 
 class Decoder(nn.Module):
     def __init__(self,nhead, embed_dim):
@@ -106,7 +156,7 @@ class Decoder(nn.Module):
         self.cross_att_norm = nn.LayerNorm(embed_dim)
         self.cross_att = MultiHeadAttention(nhead,embed_dim)
         #ffn 的两次线性变化,把维度提升又降了下来 
-        inner_dim = 2048
+        inner_dim = 1024
 
         self.ffn_linear_1 = nn.Linear(embed_dim,inner_dim)
         self.ffn_linear_2 = nn.Linear(inner_dim,embed_dim)
@@ -117,106 +167,57 @@ class Decoder(nn.Module):
     def forward(self, src, target, srcmask, tgtmask):
         #self-attention
         resdiual = target
-        att = self.self_att_dp(self.self_attention(target, target, target, mask=tgtmask))
+        att = self.self_att_dp(self.self_att(target, target, target, mask=tgtmask))
         att = resdiual + self.self_att_dp(att)
         att = self.self_att_norm(att)
-
-        # 为什么在 + 之前做 dropout 操作    
+   
         # dropout 一般跟随在复杂的算子后面, 降低训练出来算子过拟合的概率 让算子中的每一个神经元都起到作用
-        # encoder-decoder-att
-
-        # cross-att 的 residual 是?
+        # encoder-decoder-att 
         resdiual = att
         att = self.cross_att(att,src,src,mask=srcmask)
         att = self.cross_att_dp(att)
         att = self.cross_att_norm(residual+att)
 
         #ffn
-        ffn = self.fn_linear_2(self.ffn_relu(self.ffn_linear_1(att)))
+        ffn = self.ffn_linear_2(self.ffn_relu(self.ffn_linear_1(att)))
         ffn = att + ffn
         ffn = self.ffn_norm(ffn)
 
-        #encoder-decoder attention 
         return ffn
 
 class MultiDecoder(nn.Module):
-    def __init__(self,voc_size=8000,ndec=4,nhead=6,embed_dim=256):
+    def __init__(self,voc_size=8000,ndec=4,nhead=4,embed_dim=256):
         super(MultiDecoder,self).__init__()
         self.decoders = nn.ModuleList([Decoder(nhead, embed_dim) for i in range(ndec)])
-    def forward(self, src, target,srcmask,tgtmask):
-        
-        target = token
+    def forward(self, src, target,srcmask,tgtmask): 
         for layer in self.decoders:
             target = layer(src,target,srcmask,tgtmask)
         return target
 
-class Encoder(nn.Module):
-    def __init__(self,nhead,embed_dim):
-        super(Encoder,self).__init__()
-        # attention 的 Linear Shape
-        # seq_len 
-        self.attention = MultiHeadAttention(nhead,embed_dim)
-        self.dropout = nn.Dropout(0.1)
-        self.att_norm = nn.LayerNorm(embed_dim)
-    
-        #ffn
-        #1. ffn 的 Linear shape 
-        # inner_dim
-        inner_dim = 2048
-        self.ffn_linear_1 = nn.Linear(embed_dim,inner_dim)
-        self.ffn_linear_2 = nn.Linear(inner_dim,embed_dim)
-        self.ffn_dropout = nn.Dropout(0.1)
-        self.ffn_relu = nn.ReLU()
-        self.ffn_norm = nn.LayerNorm(embed_dim)
-
-    def forward(self, tokens, mask=None):
-        #+ pe
-        # tokens  = tokens + get_pe()
-        residual = tokens
-        att = self.attention(tokens,tokens,tokens,mask)
-        att = resdiual + self.dropout(att_src)
-        att = self.att_norm(att)
-
-        # ffn 
-        resdiual = att
-        ffn = self.ffn_dropout(self.fn_linear_2(self.ffn_relu(self.ffn_linear_1(att))))
-        ffn = att + resdiual
-        ffn = self.ffn_norm(ffn)
-        return ffn
-
-class MultiEncoder(nn.Module):
-    def __init__(self,voc_size=8000,nenc=4,nhead=6,hidden_dim=256):
-        super(MultiEncoder,self).__init__()
-        self.encoders = nn.ModuleList([Encoder(nhead, hidden_dim) for i in range(nenc)])
-    
-    def forward(self, src, src_pad_mask):
-        output = None
-        for layer in self.encoders:
-            output = layer(src,src_pad_mask)
-        return output
 
 class PositionEmbedding(nn.Module):
     def __init__(self, max_seq_len, hidden_dim):
+        super(PositionEmbedding,self).__init__()
         self.pe = get_pe(max_seq_len,hidden_dim)
-        self.pe.requires_grad_(False)
+        self.requires_grad_(False)
 
     def forward(self,x):
         #PE长度是固定的，输入 x 的长度是不固定的,因此要注意限制长度. seq_len 维度是1
         seq_len = x.size(1)
         #指定第1个维度可能存在裁切
-        return self.pe[:, :seq_len] + x[:,:sql_len]
+        return self.pe[:, :seq_len] + x[:,:seq_len]
 
 
 
 
 class TTransformer(nn.Module):
-    def __init__(self,voc_src_size=8000,voc_tgt_size=8000,nenc=4,ndec=4,nhead=6,hidden_dim=256):
+    def __init__(self,voc_src_size=8000,voc_tgt_size=8000,nenc=4,ndec=4,nhead=4,hidden_dim=256):
         super(TTransformer,self).__init__()
         self.src_embedding = nn.Embedding(voc_src_size,hidden_dim)
         self.tgt_embedding = nn.Embedding(voc_tgt_size,hidden_dim)
 
-        self.src_pe_embedding = PositionEmbedding(1024, hidden_dim)
-        self.tgt_pe_embedding = PositionEmbedding(1024, hidden_dim)
+        self.src_pe_embedding = PositionEmbedding(1024, hidden_dim)#.requires_grad_(False)
+        self.tgt_pe_embedding = PositionEmbedding(1024, hidden_dim)#.requires_grad_(False)
 
         self.encoders =  MultiEncoder() 
 
@@ -227,17 +228,17 @@ class TTransformer(nn.Module):
       
 
     def forward(self, src, tgt):
-        src_mask = gene_src_mask(src)
-        tgt_mask = gene_tgt_mask(tgt)
+        src_mask = gen_src_mask(src)
+        tgt_mask = gen_tgt_mask(tgt)
 
         src = self.src_pe_embedding(self.src_embedding(src))
         src = self.encoders(src, src_mask)
 
-        tgt = self.tgt_pe_embedding(self.tgt_embedding(tgt))
-        tgt =  self.decoders(src,tgt,src_mask, tgt_mask)
+#        tgt = self.tgt_pe_embedding(self.tgt_embedding(tgt))
+#        tgt =  self.decoders(src, tgt, src_mask, tgt_mask)
 
         #F.softmax 返回
-        return F.softmax(self.res_linear(tgt),dim=-1)
+ #       return F.softmax(self.voc_linear(tgt),dim=-1)
 
 class PEGenerator():
     def __init__(self, embed_size, constant=10000):
@@ -266,6 +267,18 @@ def get_pe(seq_len,embed_size):
 
 if __name__== "__main__":
     ttransformer = TTransformer()
+    from torch.profiler import profile, record_function, ProfilerActivity 
+    src = torch.rand(256*1024).reshape(256,1024).long()
+    tgt = torch.rand(256*1024).reshape(256,1024).long()
+    with profile(activities=[ProfilerActivity.CPU], profile_memory=True,record_shapes=True) as prof:
+        with record_function("model_inference"):    
+            ttransformer(src,tgt)
+
+    print(prof.key_averages().table(sort_by="self_cpu_memory_usage", row_limit=10))
+    snapshot = torch.cuda.memory._snapshot()
+    from pickle import dump
+    dump(snapshot, open('snapshot.pickle', 'wb'))
+    #pprint(snapshot['segments'])
     #out1 = torch.rand(3*2*2*4).reshape(3,2,2,4)
     #grid1 = make_grid(out1.view(-1,1,out1.shape[2],out1.shape[3]), nrow=8)
     #writer.add_image("grid1",grid1,global_step=1)
