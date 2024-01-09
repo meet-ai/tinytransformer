@@ -6,7 +6,8 @@ from tensorboardX import SummaryWriter
 from torchvision.utils import make_grid
 from utils import *
 import torch.nn.functional as F
-torch.cuda.memory._record_memory_history()
+from memory_profiler import profile
+#torch.cuda.memory._record_memory_history()
 
 #writer = SummaryWriter('./result_tensorboard')
 
@@ -17,7 +18,7 @@ class AttentionHead(nn.Module):
     def __init__(self,hidden_dim, mask=None, dropout=0.1):
         super(AttentionHead, self).__init__()
         # 这里使用了相同的 Linear hidden 和 output
-        print(hidden_dim)
+        #print(hidden_dim)
         self.Q = nn.Linear(hidden_dim, hidden_dim)
         self.K = nn.Linear(hidden_dim, hidden_dim)
         self.V = nn.Linear(hidden_dim, hidden_dim) 
@@ -27,6 +28,7 @@ class AttentionHead(nn.Module):
         self.mask = mask
 
     #兼容 self-attention 和 cross-attention 
+    @profile
     def forward(self, q, k, v, mask=None):
         #output shape  [seq_len, hidden]
         query = self.Q(q)
@@ -79,12 +81,12 @@ class MultiHeadAttention(nn.Module):
         print("MultiHeadAttention")
         #multi-head-attention 有一个优化方案,不用 for loop 把 concat 的特征放在一个矩阵里面只执行一次 attention 操作就可以
         #这里先以逻辑优先把思路串通
-        print(headcnt,hidden_dim)
+        #print(headcnt,hidden_dim)
         self.headcnt = headcnt
         self.mha = nn.ModuleList([AttentionHead(hidden_dim//headcnt) for i in range(headcnt)])
         self.join_linear = nn.Linear(hidden_dim, hidden_dim)
     
-    @profile
+    #@profile
     def forward(self,q,k,v,mask):
         #output shape [nhead*seq_len , nhead*seq_len ]
         #k reshape 
@@ -114,7 +116,7 @@ class Encoder(nn.Module):
         self.ffn_dropout = nn.Dropout(0.1)
         self.ffn_relu = nn.ReLU()
         self.ffn_norm = nn.LayerNorm(embed_dim)
-    @profile
+    #@profile
     def forward(self, tokens, mask=None):
         #self-att
         residual = tokens
@@ -268,16 +270,16 @@ def get_pe(seq_len,embed_size):
 if __name__== "__main__":
     ttransformer = TTransformer()
     from torch.profiler import profile, record_function, ProfilerActivity 
-    src = torch.rand(256*1024).reshape(256,1024).long()
-    tgt = torch.rand(256*1024).reshape(256,1024).long()
+    src = torch.rand(10*1024).reshape(10,1024).long()
+    tgt = torch.rand(10*1024).reshape(10,1024).long()
     with profile(activities=[ProfilerActivity.CPU], profile_memory=True,record_shapes=True) as prof:
         with record_function("model_inference"):    
             ttransformer(src,tgt)
 
     print(prof.key_averages().table(sort_by="self_cpu_memory_usage", row_limit=10))
-    snapshot = torch.cuda.memory._snapshot()
-    from pickle import dump
-    dump(snapshot, open('snapshot.pickle', 'wb'))
+    #snapshot = torch.cuda.memory._snapshot()
+    #from pickle import dump
+    #dump(snapshot, open('snapshot.pickle', 'wb'))
     #pprint(snapshot['segments'])
     #out1 = torch.rand(3*2*2*4).reshape(3,2,2,4)
     #grid1 = make_grid(out1.view(-1,1,out1.shape[2],out1.shape[3]), nrow=8)
