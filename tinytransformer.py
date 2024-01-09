@@ -154,7 +154,7 @@ class Decoder(nn.Module):
         self.self_att_dp = nn.Dropout(0.1)        #dropout 算子有的代码是同一个 有的代码是不同的
         self.self_att_norm = nn.LayerNorm(embed_dim)
 
-        self.cross_att_dropout = nn.Dropout(0.1)
+        self.cross_att_dp = nn.Dropout(0.1)
         self.cross_att_norm = nn.LayerNorm(embed_dim)
         self.cross_att = MultiHeadAttention(nhead,embed_dim)
         #ffn 的两次线性变化,把维度提升又降了下来 
@@ -168,14 +168,14 @@ class Decoder(nn.Module):
 
     def forward(self, src, target, srcmask, tgtmask):
         #self-attention
-        resdiual = target
+        residual = target
         att = self.self_att_dp(self.self_att(target, target, target, mask=tgtmask))
-        att = resdiual + self.self_att_dp(att)
+        att = residual + self.self_att_dp(att)
         att = self.self_att_norm(att)
    
         # dropout 一般跟随在复杂的算子后面, 降低训练出来算子过拟合的概率 让算子中的每一个神经元都起到作用
         # encoder-decoder-att 
-        resdiual = att
+        residual = att
         att = self.cross_att(att,src,src,mask=srcmask)
         att = self.cross_att_dp(att)
         att = self.cross_att_norm(residual+att)
@@ -236,11 +236,11 @@ class TTransformer(nn.Module):
         src = self.src_pe_embedding(self.src_embedding(src))
         src = self.encoders(src, src_mask)
 
-#        tgt = self.tgt_pe_embedding(self.tgt_embedding(tgt))
-#        tgt =  self.decoders(src, tgt, src_mask, tgt_mask)
+        tgt = self.tgt_pe_embedding(self.tgt_embedding(tgt))
+        tgt =  self.decoders(src, tgt, src_mask, tgt_mask)
 
         #F.softmax 返回
- #       return F.softmax(self.voc_linear(tgt),dim=-1)
+        return F.softmax(self.voc_linear(tgt),dim=-1)
 
 class PEGenerator():
     def __init__(self, embed_size, constant=10000):
@@ -254,17 +254,7 @@ class PEGenerator():
         else:
             return math.cos(seq_index/math.pow(self.constant,embed_index/self.embed_size))
 
-def get_pe(seq_len,embed_size):
-    peg = PEGenerator(embed_size)
-    pe = []
-    for i in range(seq_len):
-        embed_slice = []
-        for j in range(embed_size):
-            embed_slice.append(peg.get(i,j))
-        pe.append(embed_slice)
-    import numpy
-    pe = torch.from_numpy(numpy.array(pe)).type(torch.float32)
-    return pe
+
 
 
 if __name__== "__main__":

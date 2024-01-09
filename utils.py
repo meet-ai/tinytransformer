@@ -1,4 +1,5 @@
 import torch
+import numpy
 
 def gen_src_mask(src, pad_idx=0):
     # pad_idx  index of vocabularay, usually 0
@@ -19,4 +20,15 @@ def gen_tgt_mask(target_seq, pad_idx=10000):
     seq_mask = (torch.tril(target).type(torch.ByteTensor).to('cpu')==0)
     print("seq mask", seq_mask)
     return pad_mask | seq_mask
-     
+    
+def get_pe(seq_len,embed_size):
+    peg = PEGenerator(embed_size)
+    pe = []
+    for i in range(seq_len):
+        embed_slice = []
+        for j in range(embed_size):
+            embed_slice.append(peg.get(i,j))
+        pe.append(embed_slice)
+    import numpy
+    pe = torch.from_numpy(numpy.array(pe)).type(torch.float32)
+    return pe
