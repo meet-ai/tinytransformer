@@ -19,5 +19,13 @@ class TestMask(unittest.TestCase):
         print("mask",mask)
         r = attention_map.masked_fill(mask,-1e9)
         print("att",r)
+        
+    def test_voc(self):
+        from torchtext.vocab import build_vocab
+        from torchtext.data.utils import get_tokenizer
+        tokenizer = get_tokenizer('basic_english')
+        voc = build_vocab(text_data, tokenizer=tokenizer)
+        print(voc.get_itos())
+        
 if __name__ == '__main__':
     unittest.main()

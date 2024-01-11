@@ -1,5 +1,6 @@
 import torch
 import numpy
+import math
 
 def gen_src_mask(src, pad_idx=0):
     # pad_idx  index of vocabularay, usually 0
@@ -20,7 +21,19 @@ def gen_tgt_mask(target_seq, pad_idx=10000):
     seq_mask = (torch.tril(target).type(torch.ByteTensor).to('cpu')==0)
     print("seq mask", seq_mask)
     return pad_mask | seq_mask
+
+class PEGenerator():
+    def __init__(self, embed_size, constant=10000):
+        self.constant = constant
+        self.embed_size = embed_size
     
+    def get(self, seq_index, embed_index):
+        #sin/cos 取决于 embed_index
+        if embed_index%2==0:
+            return math.sin(seq_index/math.pow(self.constant,embed_index/self.embed_size))
+        else:
+            return math.cos(seq_index/math.pow(self.constant,embed_index/self.embed_size))
+  
 def get_pe(seq_len,embed_size):
     peg = PEGenerator(embed_size)
     pe = []

@@ -7,6 +7,7 @@ from torchvision.utils import make_grid
 from utils import *
 import torch.nn.functional as F
 from memory_profiler import profile
+import lightning as L
 #torch.cuda.memory._record_memory_history()
 
 #writer = SummaryWriter('./result_tensorboard')
@@ -15,10 +16,11 @@ from memory_profiler import profile
 
 class AttentionHead(nn.Module):
     #head 是子空间的概念,意思是让输入的形式更多样化. 灵感来自于人类可以多个维度的去输入数据来进行学习.
+    #不切分 head 计算量会比较大,类似于 group wise 
     def __init__(self,hidden_dim, mask=None, dropout=0.1):
         super(AttentionHead, self).__init__()
         # 这里使用了相同的 Linear hidden 和 output
-        #print(hidden_dim)
+        # 避免句子经过多次 att 之后会膨胀.
         self.Q = nn.Linear(hidden_dim, hidden_dim)
         self.K = nn.Linear(hidden_dim, hidden_dim)
         self.V = nn.Linear(hidden_dim, hidden_dim) 
@@ -38,12 +40,11 @@ class AttentionHead(nn.Module):
         #注意力的结算过程
         # V* (Q*K/sqrt(length_of_input_dim)
         # matmul vs Linear 一个是可学习的算子 一个是单纯的计算
-        # Q.shape = [SetenceSize, dim_of_embedding]
+        # Q.shape = [seq_len, dim_of_embedding]
         scores = torch.matmul(query, key.transpose(-2, -1)) / (key.size(-1) ** 0.5)
 
-        # mask 有两种,一种是 encoder 的 mask , 用来把 pad=0 转换
-        # 第二种是 decoder 的 mask 用来把未来 token 隐藏掉. 原理是每一个生成的 token 都是 权重*V ,把权重里面未来token去掉就不会利用到未来数据
-        
+        # mask 有两种,一种是 encoder 的 mask , 用来把 pad=0 转换成接近极小的数，这样softmax算法不会因为 e**0 失效. 
+        # 第二种是 decoder 的 mask 用来把未来 token 隐藏掉. 原理是每一个生成的 token 是用各单词的权重*V ,把权重里面未来token去掉就不会利用到未来数据
         if mask!=None:
             # mask 的shape 和 scores 的 shape 不一样. 但是因为维度广播机制, 会对shape进行填充.
             # masked_fill 把 mask 中 True 的位置进行替换
@@ -168,6 +169,10 @@ class Decoder(nn.Module):
 
     def forward(self, src, target, srcmask, tgtmask):
         #self-attention
+        #当进行训练的时候,self-att需要传入 seq mask
+        #当进行推理的时候,self-att不需要传入 seq mask
+        #seq mask 的作用是将训练并行化了.即传入完整的一句话,训练每个位置的token预测
+        #那在预测的时候，虽然有每一个token的预测,但只会取最后一个token的结果作为预测的结果. (Greedy Decoding)
         residual = target
         att = self.self_att_dp(self.self_att(target, target, target, mask=tgtmask))
         att = residual + self.self_att_dp(att)
@@ -212,7 +217,7 @@ class PositionEmbedding(nn.Module):
 
 
 
-class TTransformer(nn.Module):
+class TTransformer(L.LightningModule):
     def __init__(self,voc_src_size=8000,voc_tgt_size=8000,nenc=4,ndec=4,nhead=4,hidden_dim=256):
         super(TTransformer,self).__init__()
         self.src_embedding = nn.Embedding(voc_src_size,hidden_dim)
@@ -240,20 +245,27 @@ class TTransformer(nn.Module):
         tgt =  self.decoders(src, tgt, src_mask, tgt_mask)
 
         #F.softmax 返回
+        #这里返回的是所有位置的预测，所以最后的形状是 seq_len*voc_tgt_size
+        #也就是训练的时候，会一次把所有的位置的预测训练完毕
+        #所以需要 seq_mask 把相关性表里面用于生成新token的 att 操作进行mask处理
+        #相当于把每个token的预测 mask 到这个 token 相关性表了.
         return F.softmax(self.voc_linear(tgt),dim=-1)
 
-class PEGenerator():
-    def __init__(self, embed_size, constant=10000):
-        self.constant = constant
-        self.embed_size = embed_size
-    
-    def get(self, seq_index, embed_index):
-        #sin/cos 取决于 embed_index
-        if embed_index%2==0:
-            return math.sin(seq_index/math.pow(self.constant,embed_index/self.embed_size))
-        else:
-            return math.cos(seq_index/math.pow(self.constant,embed_index/self.embed_size))
+    def training_step(self, batch, batch_idx):
 
+        #src 是中文 seq 
+        #tgt 是英文 seq
+        #forward 一次只得到一个 token 
+        src, tgt = batch
+        #predict = self.forward(src, tgt)
+        loss = nn.functional.mse_loss(src, tgt)
+        # Logging to TensorBoard (if installed) by default
+        self.log("train_loss", loss)
+        return loss
+
+    def configure_optimizers(self):
+        optimizer = optim.Adam(self.parameters(), lr=1e-3)
+        return optimizer
 
 
 
