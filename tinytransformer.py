@@ -8,6 +8,7 @@ from utils import *
 import torch.nn.functional as F
 from memory_profiler import profile
 import lightning as L
+from torch import optim
 #torch.cuda.memory._record_memory_history()
 
 #writer = SummaryWriter('./result_tensorboard')
@@ -235,6 +236,7 @@ class TTransformer(L.LightningModule):
       
 
     def forward(self, src, tgt):
+        print("src:",src)
         src_mask = gen_src_mask(src)
         tgt_mask = gen_tgt_mask(tgt)
 
@@ -257,8 +259,8 @@ class TTransformer(L.LightningModule):
         #tgt 是英文 seq
         #forward 一次只得到一个 token 
         src, tgt = batch
-        #predict = self.forward(src, tgt)
-        loss = nn.functional.mse_loss(src, tgt)
+        predict = self.forward(src, tgt)
+        loss = nn.functional.mse_loss(predict, predict)
         # Logging to TensorBoard (if installed) by default
         self.log("train_loss", loss)
         return loss

@@ -2,7 +2,7 @@
  * @Author: meetai meetai@gmx.com
  * @Date: 2023-12-04 14:14:19
  * @LastEditors: meetai meetai@gmx.com
- * @LastEditTime: 2024-03-05 11:46:29
+ * @LastEditTime: 2024-03-05 16:04:29
  * @FilePath: /tinytransformer/README.md
  * @Description: 这是默认设置,请设置`customMade`, 打开koroFileHeader查看配置 进行设置: https://github.com/OBKoro1/koro1FileHeader/wiki/%E9%85%8D%E7%BD%AE
 -->
@@ -91,8 +91,27 @@ write_model(merged)
 
 
 ### word-embedding 
-因为词汇表一般会比较大，需要进行一下维度压缩.压缩到一个512，1024之类的维度长度上.
-### 
+因为词汇表一般会比较大，需要进行一下维度压缩.压缩到一个512，1024之类的维度长度上. 一般使用 nn.Embedding 来生成一个 Embedding Layer 对输入的句子进行处理.
+```
+    self.src_embed = nn.Embedding(voc_size, hidden_dim)
+```
+对比  Embedding 和 one-hot 
+- Embedding 向量经过训练能够捕捉单词的语义信息。例如，具有相似含义的单词在向量空间中会彼此接近。这意味着，即使单词在字面上不完全相同，它们在语义上相似的程度也能通过 Embedding 向量的距离反映出来。而 one-hot 编码不考虑语义信息，它仅仅表示单词的存在与否，无法捕捉单词之间的语义关系。
+- one-hot 编码的向量通常是稀疏的，大部分元素为零，这可能导致计算过程中的不稳定性。而 Embedding 向量是密集的，每个维度都携带信息，这有助于提高距离计算的稳定性和准确性。
+
+使用 Embedding 
+```
+#一句话经过  Tokenizer 之后转换成 LongTensor 
+sentence = torch.LongTensor([1,2,3,4,5])   #1,2,3表示词汇表中第一个词，第二个词，第三个词 
+                                           #这里需要注意的是， Embedding 输入的参数是索引,所以是 LongTensor ,而不是 FloatTensor
+embeded_sentence = self.src_embed(sentence)
+```
+
+### 神经网络处理输入
+考虑当前数据已经处理完毕，神经网络该如何处理输入的语句? 
+1. 神经网络应当充分对输入的句子进行理解和特征处理
+2. 神经网络对于输入的句子 
+
 
 
 
